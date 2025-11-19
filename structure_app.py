@@ -1,251 +1,236 @@
-# structure_app.py
 import streamlit as st
 import pandas as pd
-import numpy as np
 from anastruct import SystemElements
 import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="2D Frame & Truss Analysis (US Units)", layout="wide")
-st.title("2D Frame & Truss Analysis Tool (US Customary Units)")
+st.set_page_config(page_title="Structural Analysis (US Units)", layout="wide")
+st.title("Structural Analysis Tool (US Units)")
 
 st.markdown("""
-**Units**
-- Length / Coordinates → **feet (ft)**
-- Force → **kips (k)**
-- Distributed load → **kips/ft**
-- E → **ksi**, I → **in⁴**, A → **in²**
+**Units Guide:**
+* **Length/Coordinates:** Feet (ft)
+* **Force:** Kips (k)
+* **Distributed Load:** Kips per foot (k/ft)
+* **Modulus (E):** ksi (kips/in²)
+* **Properties (I, A):** in⁴, in²
 """)
 
-# ── Session State ─────────────────────────────────────────────────────
+# --- INITIALIZE SESSION STATE ---
 if "elements" not in st.session_state:
-    st.session_state.elements = []
+    st.session_state["elements"] = []
 if "nodes" not in st.session_state:
-    st.session_state.nodes = pd.DataFrame([
-        {"node_id": 1, "x": 0.0,  "y": 0.0},
-        {"node_id": 2, "x": 20.0, "y": 0.0},
+    st.session_state["nodes"] = pd.DataFrame([
+        {"node_id": 1, "x": 0.0, "y": 0.0},
+        {"node_id": 2, "x": 10.0, "y": 0.0}, # Default 10 ft span
     ])
 if "loads" not in st.session_state:
-    st.session_state.loads = []
+    st.session_state["loads"] = []
 
 col1, col2 = st.columns([1, 2])
 
-# ── LEFT PANEL ───────────────────────────────────────────────────────
 with col1:
     st.header("1. Define Structure")
-
-    # Nodes
-    st.subheader("A. Nodes (ft)")
-    edited_nodes = st.data_editor(
-        st.session_state.nodes,
-        num_rows="dynamic",
-        hide_index=True,
-        column_config={
-            "node_id": st.column_config.NumberColumn("Node ID", min_value=1, step=1),
-            "x": st.column_config.NumberColumn("X (ft)"),
-            "y": st.column_config.NumberColumn("Y (ft)"),
-        },
-    )
-    st.session_state.nodes = edited_nodes
-
-    node_ids = edited_nodes["node_id"].astype(int).tolist()
-
-    # Members
+    
+    # --- A. NODES ---
+    st.subheader("A. Nodes")
+    st.caption("Enter coordinates in **FEET**.")
+    edited_nodes = st.data_editor(st.session_state["nodes"], num_rows="dynamic", hide_index=True)
+    
+    # --- B. MEMBERS ---
     st.subheader("B. Members & Section Properties")
-    with st.form("add_member"):
+    node_ids = edited_nodes["node_id"].tolist()
+    
+    with st.form("add_element"):
+        st.write("**Connectivity**")
         c1, c2 = st.columns(2)
-        start = c1.selectbox("Start Node", node_ids, key="s1")
-        end   = c2.selectbox("End Node",   node_ids, index=1, key="e1")
-
-        p1, p2, p3 = st.columns(3)
-        E = p1.number_input("E (ksi)", value=29000.0, min_value=0.1)
-        I = p2.number_input("I (in⁴)", value=510.0, min_value=0.001)
-        A = p3.number_input("A (in²)", value=14.6, min_value=0.001)
-
-        if st.form_submit_button("Add Member"):
-            if start == end:
-                st.error("Start and end nodes must be different")
-            elif any(m["start"]==start and m["end"]==end for m in st.session_state.elements):
-                st.warning("Member already exists")
+        start_node = c1.selectbox("Start Node", node_ids)
+        end_node = c2.selectbox("End Node", node_ids, index=min(1, len(node_ids)-1))
+        
+        st.write("**Section Properties**")
+        cp1, cp2, cp3 = st.columns(3)
+        
+        # Default: Steel (E=29000 ksi), W12x26 (approx I=200, A=7.6)
+        E_ksi = cp1.number_input("E (ksi)", value=29000.0)
+        I_in4 = cp2.number_input("I (in⁴)", value=204.0)
+        A_in2 = cp3.number_input("Area (in²)", value=7.65)
+        
+        add_elem = st.form_submit_button("Add Member")
+        
+        if add_elem:
+            if start_node != end_node:
+                st.session_state["elements"].append({
+                    "start": start_node,
+                    "end": end_node,
+                    "E": E_ksi,
+                    "I": I_in4,
+                    "A": A_in2
+                })
             else:
-                st.session_state.elements.append({"start":start, "end":end, "E":E, "I":I, "A":A})
-                st.success("Member added")
+                st.error("Nodes must be different.")
 
-    if st.session_state.elements:
-        disp = [{"Mem":i+1,
-                 "Nodes":f"{m['start']}→{m['end']}",
-                 "E (ksi)":m["E"], "I (in⁴)":m["I"], "A (in²)":m["A"]}
-                for i,m in enumerate(st.session_state.elements)]
-        st.dataframe(pd.DataFrame(disp), hide_index=True, use_container_width=True)
+    if st.session_state["elements"]:
+        st.write("Current Members:")
+        # Display formatted table
+        display_data = []
+        for i, el in enumerate(st.session_state["elements"]):
+            display_data.append({
+                "Mem": i+1,
+                "Nodes": f"{el['start']}->{el['end']}",
+                "E (ksi)": el['E'],
+                "I (in⁴)": el['I'],
+                "A (in²)": el['A']
+            })
+        st.table(pd.DataFrame(display_data))
+        
         if st.button("Clear Members"):
-            st.session_state.elements = []
-
-    # Supports
+            st.session_state["elements"] = []
+    
+    # --- C. SUPPORTS ---
     st.subheader("C. Supports")
-    supports = {}
+    support_data = []
     for nid in node_ids:
-        c = st.columns([1.5,1,1,1])
-        c[0].write(f"Node {nid}")
-        if c[1].checkbox("Fixed",  key=f"f{nid}"): supports[nid] = "fixed"
-        elif c[2].checkbox("Pinned", key=f"p{nid}"): supports[nid] = "pinned"
-        elif c[3].checkbox("Roller",key=f"r{nid}"): supports[nid] = "roller"
+        c1, c2, c3, c4 = st.columns([1, 1, 1, 1])
+        c1.write(f"Node {nid}")
+        if c2.checkbox("Fixed", key=f"fix_{nid}"): support_data.append((nid, "fixed"))
+        elif c3.checkbox("Pin", key=f"pin_{nid}"): support_data.append((nid, "pinned"))
+        elif c4.checkbox("Roll", key=f"roll_{nid}"): support_data.append((nid, "roller"))
 
-    # Loads
+    # --- D. LOADS ---
     st.subheader("D. Loads")
     with st.form("add_load"):
-        mem_ids = list(range(1, len(st.session_state.elements)+1))
-        mem = st.selectbox("Member", options=mem_ids, format_func=lambda x: f"Member {x}") if mem_ids else None
-        typ = st.selectbox("Type", ["Point Load (k)", "Uniform Distributed (k/ft)"])
-        mag = st.number_input("Magnitude (negative = downward)", value=-10.0)
-        loc = None
-        if "Point" in typ:
-            loc = st.number_input("Distance from start (ft)", min_value=0.0, value=10.0)
+        element_indices = range(len(st.session_state["elements"]))
+        element_labels = [f"Member {i+1}" for i in element_indices]
+        
+        selected_elem_idx = st.selectbox("Apply to Member", element_indices, format_func=lambda x: element_labels[x]) if element_indices else None
+        
+        c1, c2 = st.columns(2)
+        load_type = c1.selectbox("Type", ["Point Load (k)", "Distributed Load (k/ft)"])
+        
+        # Default load: 1 kip or 1 k/ft
+        mag = c2.number_input("Magnitude (k or k/ft)", value=-1.0)
+        st.caption("Negative = Downward Direction")
+        
+        loc = 0.0
+        if "Point" in load_type:
+            loc = st.number_input("Location (ft from Start Node)", min_value=0.0, value=5.0)
+        
+        if st.form_submit_button("Add Load") and selected_elem_idx is not None:
+            st.session_state["loads"].append({
+                "type": "point" if "Point" in load_type else "distributed",
+                "element_id": selected_elem_idx + 1,
+                "value": mag,
+                "location": loc
+            })
 
-        if st.form_submit_button("Add Load") and mem:
-            ld = {"element_id": mem, "type": "point" if "Point" in typ else "distributed", "value": float(mag)}
-            if loc is not None:
-                ld["location"] = float(loc)
-            st.session_state.loads.append(ld)
-            st.success("Load added")
-
-    if st.session_state.loads:
-        ldisp = []
-        for i, l in enumerate(st.session_state.loads):
-            txt = f"{l['value']:.2f} k"
-            if l["type"]=="point":
-                txt += f" @ {l.get('location',0):.2f} ft"
-            else:
-                txt += " uniform"
-            ldisp.append({"#":i+1, "Mem":l["element_id"], "Load":txt})
-        st.dataframe(pd.DataFrame(ldisp), hide_index=True)
+    if st.session_state["loads"]:
+        st.write("Active Loads:")
+        load_tbl = []
+        for l in st.session_state["loads"]:
+            desc = f"{l['value']} k" if l['type'] == 'point' else f"{l['value']} k/ft"
+            if l['type'] == 'point': desc += f" @ {l['location']} ft"
+            load_tbl.append({"Member": l['element_id'], "Load": desc})
+        st.table(pd.DataFrame(load_tbl))
         if st.button("Clear Loads"):
-            st.session_state.loads = []
+            st.session_state["loads"] = []
 
-# ── RIGHT PANEL – ANALYSIS ─────────────────────────────────────────────
 with col2:
     st.header("2. Analysis Results")
+    
+    if not st.session_state["elements"]:
+        st.info("Please define the structure on the left.")
+    else:
+        ss = SystemElements()
+        node_map = {row['node_id']: [row['x'], row['y']] for i, row in edited_nodes.iterrows()}
+        
+        # --- SOLVER UNIT CONVERSION LOGIC ---
+        # We convert EVERYTHING to FEET and KIPS for the solver.
+        # This ensures the Moment Diagram is in k-ft and Length is in ft.
+        
+        for el in st.session_state["elements"]:
+            start, end = el['start'], el['end']
+            if start in node_map and end in node_map:
+                
+                # CONVERSION:
+                # E input is ksi. Convert to ksf (kips/ft^2) -> E * 144
+                E_ksf = el['E'] * 144.0 
+                
+                # I input is in^4. Convert to ft^4 -> I / 12^4
+                I_ft4 = el['I'] / (12.0**4)
+                
+                # A input is in^2. Convert to ft^2 -> A / 144
+                A_ft2 = el['A'] / 144.0
+                
+                # Calculate Stiffness factors
+                EI_val = E_ksf * I_ft4
+                EA_val = E_ksf * A_ft2
+                
+                ss.add_element(
+                    location=[node_map[start], node_map[end]],
+                    EI=EI_val,
+                    EA=EA_val
+                )
 
-    if not st.session_state.elements:
-        st.info("Define the structure on the left first.")
-        st.stop()
+        # Add Supports
+        for nid, stype in support_data:
+            if stype == "fixed": ss.add_support_fixed(nid)
+            elif stype == "pinned": ss.add_support_hinged(nid)
+            elif stype == "roller": ss.add_support_roll(nid)
 
-    ss = SystemElements()
+        # Add Loads
+        for l in st.session_state["loads"]:
+            if l['type'] == "point":
+                # Point load location is already in feet. Value is in kips. No conversion needed.
+                ss.point_load(element_id=l['element_id'], Fy=l['value'], location=l['location'])
+            else:
+                # Distributed load is k/ft. No conversion needed.
+                ss.q_load(element_id=l['element_id'], q=l['value'])
 
-    # Maps
-    user_to_ana_node = {}      # user node id → anastruct node id
-    member_to_elements = {}    # user member id → list of anastruct element ids
+        try:
+            ss.solve()
+            
+            # TABS
+            t1, t2, t3, t4 = st.tabs(["Structure", "Moment (M)", "Shear (V)", "Deflection (δ)"])
+            
+            with t1:
+                st.pyplot(ss.show_structure(show=False))
+                st.caption("Dimensions in Feet.")
+                
+            with t2:
+                st.write("### Bending Moment Diagram (k-ft)")
+                st.pyplot(ss.show_bending_moment(show=False))
+                
+            with t3:
+                st.write("### Shear Force Diagram (kips)")
+                st.pyplot(ss.show_shear_force(show=False))
+                
+            with t4:
+                st.write("### Displacement")
+                st.warning("Note: The graph below shows displacement in **FEET** (because the model is built in feet). Multiply by 12 to get inches.")
+                st.pyplot(ss.show_displacement(show=False))
+                
+            # REACTION TABLE
+            st.divider()
+            st.subheader("Reaction Forces")
+            reactions = ss.get_node_results_system(node_id=0) # 0 gets all
+            
+            # Parse reactions into a clean table
+            rxn_list = []
+            for node_result in reactions:
+                nid = node_result['id']
+                # Check if this node actually has a support to avoid listing 0s for free nodes
+                is_supported = any(s[0] == nid for s in support_data)
+                if is_supported:
+                    rxn_list.append({
+                        "Node": nid,
+                        "Fx (k)": round(node_result['Fx'], 2),
+                        "Fy (k)": round(node_result['Fy'], 2),
+                        "Moment (k-ft)": round(node_result['Ty'], 2)
+                    })
+            
+            if rxn_list:
+                st.table(pd.DataFrame(rxn_list))
+            else:
+                st.write("No supports defined.")
 
-    # ---- Step 1: Create all nodes (automatically via first element that uses them) ----
-    node_coords = {int(row.node_id): (float(row.x), float(row.y))
-                   for row in edited_nodes.itertuples()}
-
-    # ---- Step 2: Build members (with splitting at point loads) ----
-    for mem_idx, mem in enumerate(st.session_state.elements):
-        user_mem_id = mem_idx + 1
-        n1, n2 = mem["start"], mem["end"]
-        x1, y1 = node_coords[n1]
-        x2, y2 = node_coords[n2]
-        L = np.hypot(x2-x1, y2-y1)
-
-        # Unit conversion
-        EA = mem["E"] * 144 * (mem["A"]/144)      # ksi·in² → k·ft
-        EI = mem["E"] * 144 * (mem["I"]/(12**4))  # ksi·in⁴ → k·ft³
-
-        # Point loads on this member
-        point_loads = [ld for ld in st.session_state.loads
-                       if ld["element_id"]==user_mem_id and ld["type"]=="point"]
-        point_loads.sort(key=lambda ld: ld.get("location",0))
-
-        distances = [0.0]
-        forces    = []
-        for pl in point_loads:
-            d = pl.get("location",0)
-            if 0 < d < L:
-                distances.append(d)
-                forces.append(pl["value"])
-        distances.append(L)
-
-        elem_ids = []
-
-        for i in range(len(distances)-1):
-            d1, d2 = distances[i], distances[i+1]
-            ratio1, ratio2 = d1/L, d2/L
-            xa = x1 + ratio1*(x2-x1)
-            ya = y1 + ratio1*(y2-y1)
-            xb = x1 + ratio2*(x2-x1)
-            yb = y1 + ratio2*(y2-y1)
-
-            # Find or create nodes
-            node1 = ss.find_node_id([xa, ya]) or ss.add_element(location=[[xa, ya], [xa, ya]], EA=EA, EI=EI)  # dummy, will be replaced
-            node2 = ss.find_node_id([xb, yb])
-
-            # Proper element creation using coordinate pairs (creates nodes automatically)
-            elem_id = ss.add_element(location=[[xa, ya], [xb, yb]], EA=EA, EI=EI)
-            elem_ids.append(elem_id)
-
-            # Apply point load at the end of this segment (except last segment)
-            if i < len(forces):
-                end_node = ss.element_map[elem_id].node_id2
-                ss.point_load(node_id=end_node, Fy=forces[i])
-
-        member_to_elements[user_mem_id] = elem_ids
-
-    # ---- Step 3: Map user nodes → anastruct nodes (now they exist) ----
-    for user_id, (x, y) in node_coords.items():
-        ana_id = ss.find_node_id([x, y])
-        if ana_id is None:
-            st.error(f"Could not locate node {user_id} – this should not happen")
-        user_to_ana_node[user_id] = ana_id
-
-    # ---- Step 4: Apply supports ----
-    for user_id, typ in supports.items():
-        nid = user_to_ana_node[user_id]
-        if typ == "fixed":
-            ss.add_support_fixed(node_id=nid)
-        elif typ == "pinned":
-            ss.add_support_hinged(node_id=nid)
-        elif typ == "roller":
-            ss.add_support_roll(node_id=nid)
-
-    # ---- Step 5: Apply distributed loads ----
-    for ld in st.session_state.loads:
-        if ld["type"] == "distributed":
-            for eid in member_to_elements.get(ld["element_id"], []):
-                ss.q_load(q=ld["value"], element_id=eid)
-
-    # ---- Solve ----
-    try:
-        ss.solve()
-    except Exception as e:
-        st.error(f"Solver error: {e}")
-        st.stop()
-
-    # ---- Results ----
-    t1, t2, t3, t4, t5 = st.tabs(["Structure", "Moment (k-ft)", "Shear (k)", "Deflection", "Reactions"])
-
-    with t1:
-        st.pyplot(ss.show_structure(show=False))
-    with t2:
-        st.pyplot(ss.show_bending_moment(show=False))
-    with t3:
-        st.pyplot(ss.show_shear_force(show=False))
-    with t4:
-        factor = st.slider("Deflection scale", 50, 1000, 300, step=50)
-        st.pyplot(ss.show_displacement(factor=factor, show=False))
-    with t5:
-        st.subheader("Reactions")
-        if not supports:
-            st.info("No supports defined")
-        else:
-            rows = []
-            for uid, _ in supports.items():
-                nid = user_to_ana_node[uid]
-                res = ss.get_node_results_system(nid)[0]
-                rows.append({
-                    "Node": uid,
-                    "Fx (k)": round(res["Fx"], 3),
-                    "Fy (k)": round(res["Fy"], 3),
-                    "Mz (k-ft)": round(res["Tzz"], 3),
-                })
-            st.table(pd.DataFrame(rows))
-
-    st.success("Analysis completed!")
+        except Exception as e:
+            st.error(f"Analysis Error: {e}")
