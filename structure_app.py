@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-import numpy as np # Added for coordinate math
+import numpy as np
 from anastruct import SystemElements
 import matplotlib.pyplot as plt
 
@@ -141,8 +141,6 @@ with col2:
         node_map = {row['node_id']: [row['x'], row['y']] for i, row in edited_nodes.iterrows()}
         
         # --- INTELLIGENT BUILDER LOGIC ---
-        # This tracks which anastruct Element IDs belong to which User Member ID
-        # member_map = { user_member_id: [anastruct_id_1, anastruct_id_2] }
         member_map = {}
         current_ana_id = 1
         
@@ -175,57 +173,38 @@ with col2:
                     member_map[user_id] = [current_ana_id]
                     current_ana_id += 1
                 else:
-                    # HAS POINT LOADS - We must split the element!
-                    # For simplicity in this basic tool, we handle the FIRST point load found.
-                    # (Handling multiple point loads on one beam requires sorting them by distance)
-                    
+                    # HAS POINT LOADS - Split the element
                     pload = member_point_loads[0]
                     d = pload['location']
                     
-                    # Validate distance
                     if d <= 0 or d >= L:
-                        # Fallback if location is invalid
                         ss.add_element(location=[[x1, y1], [x2, y2]], EI=EI_val, EA=EA_val)
                         member_map[user_id] = [current_ana_id]
                         current_ana_id += 1
                         st.error(f"Load on Member {user_id} is outside the beam length ({L:.2f} ft).")
                     else:
-                        # Math: Calculate split coordinate
                         ratio = d / L
                         x_mid = x1 + ratio * (x2 - x1)
                         y_mid = y1 + ratio * (y2 - y1)
                         
-                        # Add Segment 1 (Start -> Load Point)
+                        # Segment 1
                         ss.add_element(location=[[x1, y1], [x_mid, y_mid]], EI=EI_val, EA=EA_val)
                         seg1_id = current_ana_id
                         current_ana_id += 1
                         
-                        # Add Segment 2 (Load Point -> End)
+                        # Segment 2
                         ss.add_element(location=[[x_mid, y_mid], [x2, y2]], EI=EI_val, EA=EA_val)
                         seg2_id = current_ana_id
                         current_ana_id += 1
                         
-                        # Map user member to BOTH segments (for distributed loads)
                         member_map[user_id] = [seg1_id, seg2_id]
                         
-                        # Apply the Point Load to the NEW Node (the one between segments)
-                        # The node ID of the split point is usually the latest node added.
-                        # Anastruct internal node IDs are sequential.
-                        # To be safe, we use the known connection. Segment 1 ends at the new node.
-                        # ss.element_map[seg1_id].node_id2 is the split node.
                         split_node_id = ss.element_map[seg1_id].node_id2
                         ss.point_load(node_id=split_node_id, Fy=pload['value'])
 
         # 2. Add Supports
         for nid, stype in support_data:
-            # We must be careful. User Node IDs are 1, 2... 
-            # Anastruct Node IDs usually match if we added them in order, but splitting creates new nodes.
-            # However, Anastruct's `add_support` works by finding the node at that coordinate
-            # OR by ID. Let's map User IDs to coordinates to be safe.
-            
-            # Find the anastruct node ID that exists at this coordinate
             tgt_x, tgt_y = node_map[nid]
-            # Simple search for the node ID at these coordinates
             found_node = ss.find_node_id(location=[tgt_x, tgt_y])
             
             if found_node:
@@ -236,7 +215,6 @@ with col2:
         # 3. Apply Distributed Loads
         for l in st.session_state["loads"]:
             if l['type'] == 'distributed':
-                # Apply to ALL segments of the member (in case it was split)
                 target_segments = member_map.get(l['element_id'], [])
                 for seg_id in target_segments:
                     ss.q_load(element_id=seg_id, q=l['value'])
@@ -244,14 +222,9 @@ with col2:
         try:
             ss.solve()
             
-            # TABS
             t1, t2, t3, t4 = st.tabs(["Structure", "Moment (M)", "Shear (V)", "Deflection (δ)"])
             
             with t1:
-                
-
-[Image of structural diagram]
-
                 st.pyplot(ss.show_structure(show=False))
                 st.caption("Structure with Loads (Split nodes indicate point loads)")
                 
@@ -276,16 +249,12 @@ with col2:
             rxn_list = []
             for node_result in reactions:
                 nid = node_result['id']
-                # Only show reactions if it's a support node
-                # We check if this node ID corresponds to a coordinate where a user placed a support
                 node_loc = ss.nodes_range[nid] if nid in ss.nodes_range else None
                 
                 is_support = False
                 if node_loc:
-                    # Check against user defined support coordinates
                     for user_nid, _ in support_data:
                          ux, uy = node_map[user_nid]
-                         # Floating point comparison
                          if abs(ux - node_loc[0]) < 0.01 and abs(uy - node_loc[1]) < 0.01:
                              is_support = True
                              break
